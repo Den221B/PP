@@ -17,7 +17,7 @@ def combine_audios(file_list, output_path):
 
 print("Загрузка моделей...")
 diarization_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
-                                    use_auth_token="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")
+                                    use_auth_token="token")
 
 asr_model = whisper.load_model("base")
 combined_audio_path = "Tests/3French.wav"

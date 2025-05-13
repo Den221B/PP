@@ -1,0 +1,11 @@
+torch>=2.0.0
+torchaudio>=2.0.0
+sounddevice==0.4.6
+webrtcvad==2.0.10
+whisper==1.1.10
+resemblyzer
+noisereduce==1.0.0
+pyannote.audio==3.1.1
+scipy>=1.10.0
+numpy>=1.24.0
+pydub==0.25.1

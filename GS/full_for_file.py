@@ -1,47 +1,74 @@
 import os
-from pydub import AudioSegment
-from pyannote.audio import Pipeline
-import whisper
+import json
 import torchaudio
-import tempfile
+import whisper
+from pyannote.audio import Pipeline
+from pathlib import Path
+from pydub import AudioSegment
+from .utils import reduce_noise  # Общие утилиты
 
+def process_audio_file(
+    input_path: str,
+    output_json: str = "transcript.json",
+    hf_token: str = "YOUR_HF_TOKEN"
+) -> None:
+    # Шумоподавление для всего файла
+    print("Applying noise reduction...")
+    audio = AudioSegment.from_file(input_path)
+    samples = np.array(audio.get_array_of_samples())
+    cleaned = reduce_noise(samples.astype(np.float32), audio.frame_rate)
+    cleaned_audio = AudioSegment(
+        cleaned.astype(np.int16).tobytes(),
+        frame_rate=audio.frame_rate,
+        sample_width=2,
+        channels=1
+    )
 
+    # Сохраняем очищенный файл
+    temp_path = "temp_cleaned.wav"
+    cleaned_audio.export(temp_path, format="wav")
 
-def combine_audios(file_list, output_path):
-    combined = AudioSegment.empty()
-    for file in file_list:
-        audio = AudioSegment.from_file(file)
-        combined += audio
-    combined.export(output_path, format="wav")
+    # Диаризация
+    print("Running diarization...")
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization@2.1",
+        use_auth_token=hf_token
+    )
+    diarization = pipeline(temp_path)
 
+    # ASR
+    model = whisper.load_model("medium", device="cuda")
+    results = []
 
-print("Загрузка моделей...")
-diarization_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
-                                    use_auth_token="token")
+    print("Processing segments...")
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        # Извлекаем сегмент
+        waveform, sr = torchaudio.load(temp_path)
+        start_sample = int(turn.start * sr)
+        end_sample = int(turn.end * sr)
+        segment = waveform[:, start_sample:end_sample]
 
-asr_model = whisper.load_model("base")
-combined_audio_path = "Tests/3French.wav"
+        # Сохраняем временный файл
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+            torchaudio.save(f.name, segment, sr)
 
+            # Транскрипция
+            result = model.transcribe(f.name, language="ru")
+            results.append({
+                "start": turn.start,
+                "end": turn.end,
+                "speaker": speaker,
+                "text": result["text"]
+            })
 
-print("Выполнение диаризации...")
-diarization = diarization_pipeline(combined_audio_path)
+    # Сохраняем результаты
+    with open(output_json, "w") as f:
+        json.dump(results, f, indent=2)
 
+    # Очистка
+    os.remove(temp_path)
+    print(f"Done! Results saved to {output_json}")
 
-def extract_segment(path, start, end):
-    waveform, sr = torchaudio.load(path)
-    start_frame = int(start * sr)
-    end_frame = int(end * sr)
-    segment = waveform[:, start_frame:end_frame]
-
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        torchaudio.save(f.name, segment, sr)
-        return f.name
-
-
-print("Распознавание речи по сегментам...")
-for turn, _, speaker in diarization.itertracks(yield_label=True):
-    segment_path = extract_segment(combined_audio_path, turn.start, turn.end)
-    result = asr_model.transcribe(segment_path)
-    print(f"[{turn.start:.1f}s - {turn.end:.1f}s] {speaker}: {result['text']}")
-    os.remove(segment_path)
+if __name__ == "__main__":
+    import sys
+    process_audio_file(sys.argv[1])
